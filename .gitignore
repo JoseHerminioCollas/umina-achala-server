@@ -1,0 +1,9 @@
+# Keys never come into this repo: the env file lives outside it on the server
+.env
+.env.*
+*.env
+
+node_modules/
+*.log
+.DS_Store
+.vscode/
