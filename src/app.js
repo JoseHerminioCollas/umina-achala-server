@@ -19,8 +19,11 @@ const STATUS = {
   bad_signature: 400,
   not_listed: 404,
   expired: 410,
+  replaced: 410,
   not_available: 409,
+  being_bought: 409,
   not_associated: 409,
+  insufficient_balance: 409,
   unsupported_account: 422,
   rate_limited: 429,
   failed: 502,
@@ -83,6 +86,7 @@ export function createApp({ sales, catalog, network, limits = {}, log = console 
   // eslint-disable-next-line no-unused-vars
   app.use((err, req, res, next) => {
     if (err instanceof SaleError) {
+      if (err.details?.retryAfter) res.set("Retry-After", String(err.details.retryAfter));
       return res.status(STATUS[err.code] ?? 400).json({ error: { code: err.code, message: err.message, ...err.details } });
     }
     if (err?.type === "entity.parse.failed" || err?.type === "entity.too.large") {

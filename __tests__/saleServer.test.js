@@ -166,13 +166,55 @@ describe("prepare", () => {
   test("one pending sale per item; it unlocks when the sale expires", async () => {
     const { sales, state, client } = setup();
     await sales.prepare({ token: "umina", serial: 15, buyer: BUYER });
-    await expect(sales.prepare({ token: "umina", serial: 15, buyer: "0.0.7007" })).rejects.toMatchObject({ code: "not_available" });
+    state.now += 30_000;
+    // another buyer is told it is being bought, and for how long, not that it is gone
+    await expect(sales.prepare({ token: "umina", serial: 15, buyer: "0.0.7007" })).rejects.toMatchObject({
+      code: "being_bought",
+      details: { retryAfter: VALID_SECONDS - 30 },
+    });
     // the pendant's gold is not the agate: another item is not locked
     await sales.prepare({ token: "achala", serial: 6, buyer: "0.0.7007" });
     expect(sales.pendingCount()).toBe(2);
     state.now += VALID_SECONDS * 1000 + 1;
     expect(sales.pendingCount()).toBe(0);
     await sales.prepare({ token: "umina", serial: 15, buyer: "0.0.7007" });
+    client.close();
+  });
+
+  test("the same buyer starting again replaces their own pending sale", async () => {
+    const { sales, state, client } = setup();
+    const first = await sales.prepare({ token: "umina", serial: 15, buyer: BUYER });
+    const second = await sales.prepare({ token: "umina", serial: 15, buyer: BUYER });
+    expect(second.saleId).not.toBe(first.saleId);
+    expect(sales.pendingCount()).toBe(1);
+    // the first one can no longer be submitted, and the item stays held for this buyer
+    await expect(sales.submit({ saleId: first.saleId, transaction: await walletSign(first.transaction) })).rejects.toMatchObject({ code: "replaced" });
+    await expect(sales.prepare({ token: "umina", serial: 15, buyer: "0.0.7007" })).rejects.toMatchObject({ code: "being_bought" });
+    // once its time would have run out, the replaced sale is just expired
+    state.now += VALID_SECONDS * 1000 + 1;
+    await expect(sales.submit({ saleId: first.saleId, transaction: await walletSign(first.transaction) })).rejects.toMatchObject({ code: "expired" });
+    client.close();
+  });
+
+  test("a just-sold item is not available, not being bought, while the mirror node still lists it", async () => {
+    const { sales, client, deps } = setup();
+    const sale = await sales.prepare({ token: "umina", serial: 15, buyer: BUYER });
+    const { done } = await sales.submit({ saleId: sale.saleId, transaction: await walletSign(sale.transaction) });
+    await done;
+    // the mirror node does not show the UNLISTED yet
+    deps.readDisplay.mockResolvedValue({ events: [ev(10, listed(UMINA, 15, "45"))] });
+    await expect(sales.prepare({ token: "umina", serial: 15, buyer: "0.0.7007" })).rejects.toMatchObject({ code: "not_available" });
+    client.close();
+  });
+
+  test("refuses a buyer holding less HBAR than the price, before anything is signed", async () => {
+    const key = { _type: "ED25519", key: buyerKey.publicKey.toStringRaw() };
+    const { sales, client, deps } = setup({ account: { key, notAssociated: [], balance: 44_99999999 } });
+    await expect(sales.prepare({ token: "umina", serial: 15, buyer: BUYER })).rejects.toMatchObject({ code: "insufficient_balance" });
+    expect(sales.pendingCount()).toBe(0);
+    // exactly the price is enough: UA pays the fee
+    deps.buyerAccount.mockResolvedValueOnce({ key, notAssociated: [], balance: 45_00000000 });
+    await sales.prepare({ token: "umina", serial: 15, buyer: BUYER });
     client.close();
   });
 
@@ -293,6 +335,14 @@ describe("HTTP", () => {
     expect([res.status, (await res.json()).error.code]).toEqual([410, "expired"]);
     res = await fetch(`${base}/api/nothing`);
     expect(res.status).toBe(404);
+  });
+
+  test("an item another buyer is buying answers 409 being_bought with Retry-After", async () => {
+    await post("/api/sale/prepare", { token: "umina", serial: 15, buyer: BUYER });
+    const res = await post("/api/sale/prepare", { token: "umina", serial: 15, buyer: "0.0.7007" });
+    expect(res.status).toBe(409);
+    expect(res.headers.get("retry-after")).toBe(String(VALID_SECONDS));
+    expect((await res.json()).error).toMatchObject({ code: "being_bought", retryAfter: VALID_SECONDS });
   });
 
   test("rate limits prepare per client", async () => {

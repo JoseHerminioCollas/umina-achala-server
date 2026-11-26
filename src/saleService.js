@@ -8,7 +8,9 @@
  *   checks the item is listed since it last came to the Treasury (the price
  *   comes from the display topic, never from the browser), the Treasury holds
  *   it (an Achala with its stones, sale/lib.js planSale), the buyer's account
- *   can receive the NFTs, and no other sale of it is pending. Builds the one
+ *   can receive the NFTs and holds at least the price in HBAR, and no other
+ *   buyer's sale of it is pending (the same buyer starting again replaces
+ *   their own pending sale). Builds the one
  *   atomic transfer (sale/lib.js saleTransaction) with UA as payer, one node
  *   and a short validity window; UA signs, and the Treasury when it is its
  *   own account. The sale is kept in memory until it expires and locks the
@@ -25,7 +27,10 @@
  *   catalog rebuild.
  *
  * Errors are SaleError with a code the site shows (#58): bad_request,
- * not_listed, not_available, not_associated, unsupported_account, expired,
+ * not_listed, not_available, being_bought (another buyer's sale of the item is
+ * pending; with retryAfter, the seconds until it ends), not_associated,
+ * insufficient_balance, unsupported_account, expired, replaced (the same buyer
+ * started the purchase again, and the newer sale replaced this one),
  * bad_signature, failed.
  */
 
@@ -122,6 +127,8 @@ export function createSaleService({ client, env, catalog, deps = {} }) {
   const pending = new Map();
   /** nft ID → the saleId that locks it, or "sold" until a time */
   const locks = new Map();
+  /** saleId → when it would have expired, for a sale its buyer started again */
+  const replaced = new Map();
 
   function sweep() {
     const now = d.now();
@@ -132,6 +139,7 @@ export function createSaleService({ client, env, catalog, deps = {} }) {
       }
     }
     for (const [k, lock] of locks) if (lock.until && lock.until <= now) locks.delete(k);
+    for (const [id, expiresAt] of replaced) if (expiresAt <= now) replaced.delete(id);
   }
 
   function pickNode() {
@@ -161,8 +169,19 @@ export function createSaleService({ client, env, catalog, deps = {} }) {
     const plan = await planSale(env, provenance.events, { tokenClass, serial }, d.holders ? { holders: d.holders } : {});
     if (plan.problems.length) throw new SaleError("not_available", `${mint.event.stone_id} is not available`, { problems: plan.problems });
     const nftKeys = plan.nftIds.map(nftKey);
-    if (nftKeys.some((k) => locks.has(k))) {
-      throw new SaleError("not_available", `${mint.event.stone_id} is being bought or was just sold`);
+    const held = nftKeys.map((k) => locks.get(k)).filter(Boolean);
+    if (held.some((lock) => lock.until)) {
+      throw new SaleError("not_available", `${mint.event.stone_id} was just sold`);
+    }
+    // A pending sale: another buyer's holds the item until it expires; the same
+    // buyer starting again (after declining, or from another tab) replaces it
+    const pendingIds = [...new Set(held.map((lock) => lock.saleId))];
+    const others = pendingIds.map((id) => pending.get(id)).filter((sale) => sale && sale.parties.buyerId !== buyer);
+    if (others.length) {
+      const endsAt = Math.max(...others.map((sale) => sale.expiresAt));
+      throw new SaleError("being_bought", `${mint.event.stone_id} is being bought; try again when that sale ends`, {
+        retryAfter: Math.max(1, Math.ceil((endsAt - d.now()) / 1000)),
+      });
     }
 
     // The buyer can receive every token that moves
@@ -177,9 +196,23 @@ export function createSaleService({ client, env, catalog, deps = {} }) {
         tokens: account.notAssociated,
       });
     }
+    // The buyer pays only the price (UA pays the fee): refused here, a short
+    // balance would make the network refuse the transfer and charge UA its fee
+    const price = Hbar.fromString(listing.price);
+    if (account.balance != null && BigInt(account.balance) < BigInt(price.toTinybars().toString())) {
+      throw new SaleError("insufficient_balance", `${buyer} holds less than ${listing.price} HBAR`);
+    }
+
+    // This buyer's own earlier sale of the item is replaced: its transaction can no longer be submitted here
+    for (const id of pendingIds) {
+      const old = pending.get(id);
+      if (!old) continue;
+      pending.delete(id);
+      replaced.set(id, old.expiresAt);
+      for (const k of old.nftKeys) if (locks.get(k)?.saleId === id) locks.delete(k);
+    }
 
     // The transfer: UA pays the fee, one node, a short validity window; UA and the Treasury sign
-    const price = Hbar.fromString(listing.price);
     const parties = { uaId: env.OPERATOR_ID, treasuryId: env.TREASURY_ID, buyerId: buyer, price };
     let tx = saleTransaction(parties, plan)
       .setNodeAccountIds([pickNode()])
@@ -207,6 +240,9 @@ export function createSaleService({ client, env, catalog, deps = {} }) {
     const { saleId, transaction } = checkSubmitInput(body);
     sweep();
     const sale = pending.get(saleId);
+    if (!sale && replaced.has(saleId)) {
+      throw new SaleError("replaced", "this purchase was started again; approve the newest request and decline this one");
+    }
     if (!sale) throw new SaleError("expired", "this sale has expired or was already submitted; start again");
 
     // Only the buyer's signature is taken from the wallet's transaction

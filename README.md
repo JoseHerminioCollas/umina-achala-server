@@ -46,9 +46,12 @@ An error answers `{ "error": { "code", "message", ... } }`:
 | `bad_request` | 400 | The input's shape, an unknown account, or UA's own account as buyer |
 | `bad_signature` | 400 | Not the prepared transaction, or not signed by the buyer's key |
 | `not_listed` | 404 | Not for sale |
-| `not_available` | 409 | Not held by the Treasury, mounted in an Achala, being bought, or just sold |
+| `not_available` | 409 | Not held by the Treasury, mounted in an Achala, or just sold |
+| `being_bought` | 409 | Another buyer's sale of the item is pending; `retryAfter` (and the `Retry-After` header) gives the seconds until it ends. The same buyer starting again replaces their own pending sale |
 | `not_associated` | 409 | The buyer must associate `tokens` first |
+| `insufficient_balance` | 409 | The buyer's account holds less HBAR than the price; refused before anything is signed, so UA pays no fee for a transfer the network would refuse |
 | `expired` | 410 | The prepared sale expired or was already submitted |
+| `replaced` | 410 | The same buyer started the purchase again: a newer sale replaced this one; sign the newest one |
 | `unsupported_account` | 422 | The buyer's account has a key list or threshold key |
 | `rate_limited` | 429 | Too many requests |
 | `failed` | 502 | Hedera refused the sale (`status`) |
