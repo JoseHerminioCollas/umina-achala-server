@@ -112,4 +112,12 @@ npm install
 npm test        # the mirror node, the topics and Hedera's execute are mocked
 ```
 
-During development `umina-achala-chain` is linked from the folder next to this one (`file:../umina-achala-chain`). Before deploying, it is pinned to a tag of the chain repo (`github:umina-achala/umina-achala-chain#vX.Y.Z`).
+`umina-achala-chain` is pinned to a tag of the chain repo (`github:umina-achala/umina-achala-chain#vX.Y.Z`, now `v0.2.0-testnet.3`); `package-lock.json` records the tag's commit, which `npm ci` installs on the server.
+
+To work against chain changes that are not tagged yet, install the folder next to this one without changing `package.json`:
+
+```
+npm install ../umina-achala-chain --no-save
+```
+
+`npm ci` puts the tagged version back. For a new chain release: tag the chain repo, push the tag to both remotes, change the tag in `package.json`, run `npm install` and `npm test`, and commit `package.json` with `package-lock.json`.
