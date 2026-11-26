@@ -89,14 +89,21 @@ pm2 save && pm2 startup     # keep it running across reboots
 pm2 logs umina-achala-sale
 ```
 
-Nginx sends the site's `/api/` here:
+Nginx sends the site's `/api/` here (the site's copy, which the server's file is copied from, is umina-achala-web's `deploy/nginx/umina-achala.conf`):
 
 ```nginx
 location /api/ {
     proxy_pass http://127.0.0.1:8787;
+    proxy_set_header Host $host;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    add_header Cache-Control "no-store" always;
 }
 ```
+
+- No trailing slash on `proxy_pass`: the path arrives unchanged (`/api/sale/prepare`), as the routes expect.
+- `X-Forwarded-For`: the rate limit counts per visitor IP. The app trusts only a proxy on loopback, so a header a visitor sends cannot change it.
+- `no-store`: sale and health replies are never cached, errors included.
 
 ## Develop
 
