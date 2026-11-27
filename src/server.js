@@ -15,6 +15,7 @@ import { createApp } from "./app.js";
 import { createCatalogQueue } from "./catalogQueue.js";
 import { createDisplayWatcher } from "./displayWatcher.js";
 import { createSaleService } from "./saleService.js";
+import { topicKeyProblems } from "./topicKeys.js";
 
 export const SERVER_ENV = [
   "OPERATOR_ID",
@@ -39,14 +40,23 @@ export function serverProblems(env) {
   return problems;
 }
 
-/** Starts the server; returns it, or null when the environment is not usable. */
-export function start(env = process.env) {
+/**
+ * Starts the server; resolves to it, or to null when the environment is not
+ * usable or the backend could not post to a topic.
+ */
+export async function start(env = process.env, { readTopic } = {}) {
   const fileProblem =
     env.ENV_FILE && !networkProblem(env)
       ? envFileProblem(env.ENV_FILE, env) ?? (existsSync(env.ENV_FILE) ? null : `ENV_FILE ${env.ENV_FILE} does not exist`)
       : null;
   if (env.ENV_FILE && !fileProblem) loadEnv(env.ENV_FILE);
   const problems = fileProblem ? [fileProblem] : serverProblems(env);
+  if (!problems.length) {
+    // the topics' submit keys, on the mirror node (#139)
+    const topics = await topicKeyProblems(env, readTopic ? { readTopic } : {});
+    topics.warnings.forEach((w) => console.warn(`⚠️  ${w}`));
+    problems.push(...topics.problems);
+  }
   if (problems.length) {
     console.error("❌ The sale backend cannot start:");
     problems.forEach((p) => console.error(`   - ${p}`));

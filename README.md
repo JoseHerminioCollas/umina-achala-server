@@ -73,7 +73,8 @@ The site reads only `data/catalog.json`, built by umina-achala-chain's catalog b
 | `OPERATOR_ID`, `OPERATOR_KEY` | UA: pays the fees and receives the price |
 | `TREASURY_ID` (`TREASURY_KEY` if it is not the operator) | Holds the NFTs for sale |
 | `UMINA_TOKEN_ID`, `ACHALA_TOKEN_ID` | The tokens |
-| `HCS_TOPIC_ID`, `HCS_DISPLAY_TOPIC_ID` (`HCS_SUBMIT_KEY` if the topics have one) | Provenance and display topics |
+| `HCS_TOPIC_ID`, `HCS_DISPLAY_TOPIC_ID` | Provenance and display topics |
+| `HCS_SUBMIT_KEY` | The topics' submit key. Needed when the topics have one (the testnet topics do) and it is not the operator key. At start the backend reads both topics from the mirror node and refuses to start when it could not post to them; without this check a sale would settle and its `SALE` and `UNLISTED` fail with `INVALID_SIGNATURE`. |
 | `CATALOG_DIR` | The site's data folder (the live site's `build/data`) |
 | `PORT` | Optional, 8787; the service listens on 127.0.0.1 only |
 
